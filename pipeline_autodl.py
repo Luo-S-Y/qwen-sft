@@ -221,8 +221,10 @@ def train(name, method, iters, is_lora, num_layers=None):
     train_ds = ds["train"].map(tok_fn, batched=True, remove_columns=["text"])
     eval_ds = ds["valid"].map(tok_fn, batched=True, remove_columns=["text"])
 
-    # Full 训练激活内存大(全参微调), 开启梯度检查点省显存(代价约 20% 速度); LoRA 不需要
-    use_grad_ckpt = not is_lora
+    # 默认关闭梯度检查点: 与"冻结前N层"组合会触发 checkpoint 重算报错
+    # (element 0 of tensors does not require grad...)
+    # 若 Full 训练 OOM, 用 AUTODL_CKPT=1 开启(省显存, 代价约 20% 速度)
+    use_grad_ckpt = os.environ.get("AUTODL_CKPT", "0") == "1"
 
     # 确保保存目录存在 (adapters/models 可能是指向数据盘的符号链接, 新实例为空目录)
     os.makedirs(save_dir, exist_ok=True)
