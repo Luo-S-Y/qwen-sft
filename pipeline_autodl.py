@@ -6,14 +6,25 @@ ReasonLite SFT 复现 pipeline — AutoDL (NVIDIA CUDA) 版
 实验: 10 组矩阵 (baseline + LoRA r16后8层 100/500/1000 + Full后8层 100/500/1000 + Full后16层 100/500/1000)
 
 安装依赖:
-  pip install torch transformers peft datasets vllm sympy sentencepiece -i https://pypi.tuna.tsinghua.edu.cn/simple
+  # 训练环境: pip install torch transformers peft datasets sympy sentencepiece
+  # 评测加速(可选, 4090 推荐): 装好 vllm>=0.8.5 后自动用 vLLM 批量评测
+  #   conda create -n vllm python=3.12 -y && conda activate vllm
+  #   pip install vllm==0.8.5 transformers peft datasets sympy sentencepiece
+  #   (vllm 环境可同时训练+评测, 一次性跑通全流程)
 
 运行:
   # 模型/数据从 HF 下载(国内走 hf-mirror, 脚本已默认设置 HF_ENDPOINT)
   # 也可设置 AUTODL_MODEL=/path/to/Qwen3-0.6B 使用本地模型
   python pipeline_autodl.py
 
-进度: 全程 stdout 实时打印(时间戳 + tqdm), 每版本评测日志独立存 result/autodl/eval_{version}.log/.json
+评测后端自动选择: 环境有 vllm -> vLLM 批量评测(5-10x 加速); 否则回退 transformers generate
+环境变量:
+  AUTODL_BATCH / AUTODL_ACCUM  训练 batch / 梯度累积 (默认 4/1)
+  AUTODL_CKPT=1                开启梯度检查点(Full OOM 时用)
+  MAX_NEW=512                  vLLM 生成最大 token 数
+  FORCE=1                      强制重评(覆盖已有评测结果)
+
+进度: 全程 stdout 实时打印(时间戳 + tqdm), 每版本评测日志独立存 result/autodl/{version}.log/.json
 """
 import os, sys, re, json, time, argparse
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -51,6 +62,15 @@ MATRIX = [
     ("Full", "后16层", 1000, "full16_1000", False),
 ]
 QWEN_LAYERS = 28
+
+# 评测后端: 环境有 vllm 则用 vLLM 批量评测(4090 加速 5-10x), 否则 transformers generate
+try:
+    import vllm  # noqa: F401
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+MAX_NEW = int(os.environ.get("MAX_NEW", "512"))
+FORCE = os.environ.get("FORCE", "0") == "1"
 
 
 def log(msg):
@@ -333,6 +353,81 @@ def evaluate(name, method, is_lora):
     log(f"已保存 -> {json_path}")
 
 
+# ==================== 评测 (vLLM 批量, 需环境装 vllm>=0.8.5) ====================
+def _eval_vllm_run(llm, sampling, name, method, prompts, problems, lora_path=None):
+    json_path = os.path.join(EVAL_DIR, f"{name}.json")
+    if os.path.exists(json_path) and not FORCE:
+        log(f"{name} 评测已存在, 跳过 (FORCE=1 强制重评)")
+        return
+    from vllm.lora.request import LoRARequest
+    lora_req = LoRARequest(lora_name=name, lora_path=lora_path) if lora_path else None
+    log(f"Eval(vLLM): {name} ({method})" + (" + LoRA" if lora_req else ""))
+    t0 = time.time()
+    outputs = llm.generate(prompts, sampling, lora_request=lora_req)
+    gen_time = time.time() - t0
+
+    results = []
+    log_f = open(os.path.join(EVAL_DIR, f"{name}.log"), "w", buffering=1)
+    for i, (out, (problem, expected)) in enumerate(zip(outputs, problems)):
+        text = out.outputs[0].text
+        ans = extract_answer(text)
+        correct = answers_match(ans, expected)
+        tok_cnt = len(out.outputs[0].token_ids)
+        results.append({"idx": i, "problem": problem, "expected": expected, "output": text,
+                        "extracted": ans, "correct": correct,
+                        "completion_tokens": tok_cnt, "output_chars": len(text),
+                        "gen_time_s": 0.0, "has_boxed": "\\boxed" in text})
+        log_f.write(f"######第{i+1}个问题######\n{problem}\n\n---模型输出---\n{text}\n\n")
+        log_f.write(f"##第{i+1}个问题的答案##：{ans} | 预期: {expected} | {'✓' if correct else '✗'}\n{'='*40}\n\n")
+    log_f.close()
+
+    total = len(problems)
+    correct = sum(1 for r in results if r["correct"])
+    toks = [r["completion_tokens"] for r in results]
+    summary = {"version": name, "method": method, "accuracy": correct / total, "correct": correct, "total": total,
+               "avg_completion_tokens": round(sum(toks) / total, 1),
+               "extract_failed": sum(1 for r in results if not r["extracted"]),
+               "boxed_ratio": round(sum(1 for r in results if r["has_boxed"]) / total, 3),
+               "total_gen_time_s": round(gen_time, 1), "results": results}
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    print(f"  Accuracy: {correct}/{total} = {correct/total*100:.1f}% | 50条生成 {gen_time:.0f}s ({total/gen_time:.1f} 条/s)", flush=True)
+
+
+def evaluate_all_vllm():
+    from vllm import LLM, SamplingParams
+    problems = load_problems()
+    prompts = [EVAL_PROMPT.format(problem=p) for p, _ in problems]
+    os.makedirs(EVAL_DIR, exist_ok=True)
+    sampling = SamplingParams(max_tokens=MAX_NEW, temperature=0.0)
+
+    # base 实例: baseline + 3 个 LoRA (换 lora_request, 免重复加载模型)
+    log(f"评测后端 vLLM: 加载 base 模型 {MODEL} (enable_lora)...")
+    llm = LLM(model=MODEL, trust_remote_code=True, enable_lora=True, max_lora_rank=16,
+              dtype="bfloat16", max_model_len=2048, gpu_memory_utilization=0.8, tensor_parallel_size=1)
+    for method, layers, iters, name, is_lora in MATRIX:
+        if name == "baseline":
+            _eval_vllm_run(llm, sampling, "baseline", "baseline", prompts, problems)
+        elif is_lora:
+            _eval_vllm_run(llm, sampling, name, "LoRA", prompts, problems, lora_path=os.path.join(ADAPTER_DIR, name))
+    del llm
+
+    # Full: 每版本独立模型路径 (0.6B 加载几秒, 可接受)
+    for method, layers, iters, name, is_lora in MATRIX:
+        if is_lora or name == "baseline":
+            continue
+        mp = os.path.join(FULL_DIR, name)
+        if not os.path.isfile(os.path.join(mp, "config.json")):
+            log(f"{name} 模型不存在 {mp}, 跳过")
+            continue
+        log(f"加载 Full 模型 {mp}...")
+        fllm = LLM(model=mp, trust_remote_code=True, enable_lora=False,
+                   dtype="bfloat16", max_model_len=2048, gpu_memory_utilization=0.8, tensor_parallel_size=1)
+        _eval_vllm_run(fllm, sampling, name, "Full", prompts, problems)
+        del fllm
+        import gc; gc.collect()
+
+
 # ==================== 对比报告 ====================
 def compare_results():
     log("生成对比报告")
@@ -385,12 +480,25 @@ def main():
     # Full 后16层
     for iters in [100, 500, 1000]:
         train(f"full16_{iters}", f"Full 后16层 {iters}", iters, is_lora=False, num_layers=16)
-    # 评估全部 10 版本
-    for method, _, _, name, is_lora in MATRIX:
+    # 评估全部 10 版本 (优先 vLLM 批量, 否则 transformers 逐条)
+    if VLLM_AVAILABLE:
+        log("评测后端: vLLM (批量, 5-10x 加速)")
         try:
-            evaluate(name, method, is_lora)
+            evaluate_all_vllm()
         except Exception as e:
-            print(f"  {name} 评测失败: {e}", flush=True)
+            print(f"  vLLM 评测失败: {e}, 回退 transformers", flush=True)
+            for method, _, _, name, is_lora in MATRIX:
+                try:
+                    evaluate(name, method, is_lora)
+                except Exception as e2:
+                    print(f"  {name} 评测失败: {e2}", flush=True)
+    else:
+        log("评测后端: transformers generate (装 vllm>=0.8.5 可加速)")
+        for method, _, _, name, is_lora in MATRIX:
+            try:
+                evaluate(name, method, is_lora)
+            except Exception as e:
+                print(f"  {name} 评测失败: {e}", flush=True)
     compare_results()
     log(f"PIPELINE COMPLETE! 总耗时 {(time.time()-t_start)/3600:.1f} 小时")
 
