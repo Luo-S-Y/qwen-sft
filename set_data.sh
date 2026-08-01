@@ -35,6 +35,16 @@ else
     echo "[1/4] 未检测到数据盘 /root/autodl-tmp, 目录保持默认位置"
 fi
 
+# 预创建训练保存目录 (新实例数据盘为空, 避免训练时 FileNotFoundError)
+echo "  预创建训练保存目录..."
+for d in lora_100 lora_500 lora_1000 full8_100 full8_500 full8_1000 full16_100 full16_500 full16_1000; do
+    mkdir -p "adapters/$d"
+done
+mkdir -p "models/full/full8_100" "models/full/full8_500" "models/full/full8_1000" \
+         "models/full/full16_100" "models/full/full16_500" "models/full/full16_1000"
+echo "  adapters/: $(ls adapters/ | tr '\n' ' ')"
+echo "  models/full/: $(ls models/full/ 2>/dev/null | tr '\n' ' ')"
+
 # ---------- 2. 下载模型 (幂等: 已下载则跳过) ----------
 echo ""
 echo "[2/4] 检查模型 models/Qwen3-0.6B..."
