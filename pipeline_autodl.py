@@ -23,6 +23,10 @@ DATA_DIR = os.path.join(BASE, "data", "lora_short")
 ADAPTER_DIR = os.path.join(BASE, "adapters")
 FULL_DIR = os.path.join(BASE, "models", "full")
 EVAL_DIR = os.path.join(BASE, "result", "autodl")
+# 训练 batch 配置 (每步样本数 = BATCH_SIZE × GRAD_ACCUM = 4, 与 iters 语义一致)
+# 2080 Ti 22GB 可试 AUTODL_BATCH=2 AUTODL_ACCUM=2 或 AUTODL_BATCH=4 AUTODL_ACCUM=1
+BATCH_SIZE = int(os.environ.get("AUTODL_BATCH", "1"))
+GRAD_ACCUM = int(os.environ.get("AUTODL_ACCUM", "4"))
 # 优先用本地已下载的模型 (set_data.sh 负责下载), 否则回退 HF id
 LOCAL_MODEL = os.path.join(BASE, "models", "Qwen3-0.6B")
 MODEL = os.environ.get("AUTODL_MODEL") or (
@@ -218,7 +222,7 @@ def train(name, method, iters, is_lora, num_layers=None):
 
     args = TrainingArguments(
         output_dir=os.path.join(save_dir, "_ckpt"), max_steps=iters,
-        per_device_train_batch_size=1, gradient_accumulation_steps=4,
+        per_device_train_batch_size=BATCH_SIZE, gradient_accumulation_steps=GRAD_ACCUM,
         learning_rate=1e-4, bf16=True, logging_steps=5, save_strategy="no",
         eval_strategy="steps", eval_steps=50, report_to=[], seed=42,
     )
