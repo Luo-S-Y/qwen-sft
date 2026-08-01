@@ -227,6 +227,9 @@ def train(name, method, iters, is_lora, num_layers=None):
     train_ds = ds["train"].map(tok_fn, batched=True, remove_columns=["text"])
     eval_ds = ds["valid"].map(tok_fn, batched=True, remove_columns=["text"])
 
+    # Full 训练激活内存大(全参微调), 开启梯度检查点省显存(代价约 20% 速度); LoRA 不需要
+    use_grad_ckpt = not is_lora
+
     args = TrainingArguments(
         output_dir=os.path.join(save_dir, "_ckpt"), max_steps=iters,
         per_device_train_batch_size=BATCH_SIZE, gradient_accumulation_steps=GRAD_ACCUM,
@@ -235,6 +238,7 @@ def train(name, method, iters, is_lora, num_layers=None):
         eval_strategy="steps", eval_steps=100, report_to=[], seed=42,
         dataloader_num_workers=4,   # CPU 并行加载数据(避免 GPU 等数据)
         dataloader_pin_memory=True,
+        gradient_checkpointing=use_grad_ckpt,
     )
     trainer = Trainer(model=model, args=args, train_dataset=train_ds, eval_dataset=eval_ds,
                       data_collator=DataCollatorForLanguageModeling(tokenizer=tok, mlm=False))
