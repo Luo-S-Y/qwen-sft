@@ -224,6 +224,9 @@ def train(name, method, iters, is_lora, num_layers=None):
     # Full 训练激活内存大(全参微调), 开启梯度检查点省显存(代价约 20% 速度); LoRA 不需要
     use_grad_ckpt = not is_lora
 
+    # 确保保存目录存在 (adapters/models 可能是指向数据盘的符号链接, 新实例为空目录)
+    os.makedirs(save_dir, exist_ok=True)
+
     args = TrainingArguments(
         output_dir=os.path.join(save_dir, "_ckpt"), max_steps=iters,
         per_device_train_batch_size=BATCH_SIZE, gradient_accumulation_steps=GRAD_ACCUM,
