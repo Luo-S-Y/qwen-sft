@@ -24,9 +24,10 @@ ADAPTER_DIR = os.path.join(BASE, "adapters")
 FULL_DIR = os.path.join(BASE, "models", "full")
 EVAL_DIR = os.path.join(BASE, "result", "autodl")
 # 训练 batch 配置 (每步样本数 = BATCH_SIZE × GRAD_ACCUM = 4, 与 iters 语义一致)
-# 2080 Ti 22GB 可试 AUTODL_BATCH=2 AUTODL_ACCUM=2 或 AUTODL_BATCH=4 AUTODL_ACCUM=1
-BATCH_SIZE = int(os.environ.get("AUTODL_BATCH", "1"))
-GRAD_ACCUM = int(os.environ.get("AUTODL_ACCUM", "4"))
+# 默认方案2: batch=4 + accum=1 (2080 Ti 22GB 推荐)
+# 显存不足时可用 AUTODL_BATCH=2 AUTODL_ACCUM=2 或 AUTODL_BATCH=1 AUTODL_ACCUM=4 覆盖
+BATCH_SIZE = int(os.environ.get("AUTODL_BATCH", "4"))
+GRAD_ACCUM = int(os.environ.get("AUTODL_ACCUM", "1"))
 # 优先用本地已下载的模型 (set_data.sh 负责下载), 否则回退 HF id
 LOCAL_MODEL = os.path.join(BASE, "models", "Qwen3-0.6B")
 MODEL = os.environ.get("AUTODL_MODEL") or (
