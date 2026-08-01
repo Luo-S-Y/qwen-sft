@@ -178,10 +178,11 @@ def train(name, method, iters, is_lora, num_layers=None):
         return
 
     log(f"Step: {method} {iters} iters -> {save_dir}")
-    # 混合精度: Ampere+(sm80+) 用 bf16(原生); Turing(sm75, 如 2080Ti) 用 fp16(原生, bf16 会降级模拟变慢)
+    # 混合精度: Ampere+(sm80+) 用 bf16(模型直接 bf16, 无 scaler);
+    # Turing(sm75, 如 2080Ti) 用 fp16 AMP(模型保持 fp32, 由 autocast+scaler 处理, 避免 fp16 梯度 unscale 报错)
     cap = torch.cuda.get_device_capability()
     use_bf16 = cap[0] >= 8
-    dtype = torch.bfloat16 if use_bf16 else torch.float16
+    dtype = torch.bfloat16 if use_bf16 else torch.float32
     print(f"混合精度: {'bf16' if use_bf16 else 'fp16'} (GPU sm_{cap[0]}{cap[1]})", flush=True)
     model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=dtype, trust_remote_code=True)
     tok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
