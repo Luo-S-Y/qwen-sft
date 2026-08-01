@@ -354,13 +354,13 @@ def evaluate(name, method, is_lora):
 
 
 # ==================== 评测 (vLLM 批量, 需环境装 vllm>=0.8.5) ====================
-def _eval_vllm_run(llm, sampling, name, method, prompts, problems, lora_path=None):
+def _eval_vllm_run(llm, sampling, name, method, prompts, problems, lora_path=None, lora_id=None):
     json_path = os.path.join(EVAL_DIR, f"{name}.json")
     if os.path.exists(json_path) and not FORCE:
         log(f"{name} 评测已存在, 跳过 (FORCE=1 强制重评)")
         return
     from vllm.lora.request import LoRARequest
-    lora_req = LoRARequest(lora_name=name, lora_path=lora_path) if lora_path else None
+    lora_req = LoRARequest(lora_name=name, lora_int_id=lora_id, lora_path=lora_path) if lora_path else None
     log(f"Eval(vLLM): {name} ({method})" + (" + LoRA" if lora_req else ""))
     t0 = time.time()
     outputs = llm.generate(prompts, sampling, lora_request=lora_req)
@@ -405,11 +405,14 @@ def evaluate_all_vllm():
     log(f"评测后端 vLLM: 加载 base 模型 {MODEL} (enable_lora)...")
     llm = LLM(model=MODEL, trust_remote_code=True, enable_lora=True, max_lora_rank=16,
               dtype="bfloat16", max_model_len=2048, gpu_memory_utilization=0.8, tensor_parallel_size=1)
+    lora_id = 1  # vllm 0.8.x 要求 LoRARequest 显式传 lora_int_id
     for method, layers, iters, name, is_lora in MATRIX:
         if name == "baseline":
             _eval_vllm_run(llm, sampling, "baseline", "baseline", prompts, problems)
         elif is_lora:
-            _eval_vllm_run(llm, sampling, name, "LoRA", prompts, problems, lora_path=os.path.join(ADAPTER_DIR, name))
+            _eval_vllm_run(llm, sampling, name, "LoRA", prompts, problems,
+                           lora_path=os.path.join(ADAPTER_DIR, name), lora_id=lora_id)
+            lora_id += 1
     del llm
 
     # Full: 每版本独立模型路径 (0.6B 加载几秒, 可接受)
