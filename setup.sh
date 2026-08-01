@@ -27,19 +27,18 @@ export HF_ENDPOINT=https://hf-mirror.com
 echo "已设置 HF_ENDPOINT=https://hf-mirror.com"
 
 echo ""
-echo "[3/4] 安装依赖 (torch/transformers/peft/datasets/vllm/sympy)..."
-$PY -m pip install torch transformers peft datasets vllm sympy sentencepiece
+echo "[3/4] 安装依赖 (torch/transformers/peft/datasets/sympy)..."
+# 注意: 不装 vllm (新版 vllm 不支持 2080Ti sm_75, 且与旧 torch 冲突); 评测用 transformers
+$PY -m pip install torch transformers peft datasets sympy sentencepiece
 
 echo ""
 echo "[4/4] 验证安装..."
 $PY -c "
 import torch, transformers, peft, datasets, sympy
-import vllm
 print(f'torch        {torch.__version__}')
 print(f'transformers {transformers.__version__}')
 print(f'peft         {peft.__version__}')
 print(f'datasets     {datasets.__version__}')
-print(f'vllm         {vllm.__version__}')
 print('全部依赖 OK')
 "
 

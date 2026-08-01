@@ -64,13 +64,9 @@ def ensure_env():
             __import__(m)
         except ImportError:
             missing.append(m)
-    try:
-        import vllm
-    except ImportError:
-        missing.append("vllm")
     if missing:
         print(f"缺少依赖: {', '.join(missing)}", flush=True)
-        print("请先安装: pip install torch transformers peft datasets vllm sympy sentencepiece", flush=True)
+        print("请先安装: pip install torch transformers peft datasets sympy sentencepiece", flush=True)
         sys.exit(1)
 
 
@@ -275,38 +271,48 @@ def evaluate(name, method, is_lora):
 
     log(f"Eval: {name} ({method})")
     problems = load_problems()
-    prompts = [EVAL_PROMPT.format(problem=p) for p, _ in problems]
     total = len(problems)
 
-    from vllm import LLM, SamplingParams, LoRARequest
+    # 评测后端: transformers generate (兼容 2080 Ti sm_75, 不依赖 vLLM)
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
     if name == "baseline":
-        model_path, lora_req = MODEL, None
+        model_path, adapter_dir = MODEL, None
     elif is_lora:
-        lora_path = os.path.join(ADAPTER_DIR, name)
-        model_path, lora_req = MODEL, LoRARequest(name, 1, lora_path)
+        model_path, adapter_dir = MODEL, os.path.join(ADAPTER_DIR, name)
     else:
-        model_path, lora_req = os.path.join(FULL_DIR, name), None
-    llm = LLM(model=model_path, enable_lora=(lora_req is not None), max_lora_rank=32,
-              max_model_len=4096, gpu_memory_utilization=0.85)
-    params = SamplingParams(temperature=0, max_tokens=2048)
+        model_path, adapter_dir = os.path.join(FULL_DIR, name), None
+    model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16,
+                                                 trust_remote_code=True).to("cuda")
+    tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    if adapter_dir:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, adapter_dir).to("cuda")
+    model.eval()
 
-    t_start = time.time()
-    outputs = llm.generate(prompts, params, use_tqdm=True, lora_request=lora_req)
     results = []
     log_f = open(log_path, "w", buffering=1)
-    for i, (out, (problem, expected)) in enumerate(zip(outputs, problems)):
-        gen = out.outputs[0]
-        text = gen.text
+    t_start = time.time()
+    for i, (problem, expected) in enumerate(problems):
+        prompt = EVAL_PROMPT.format(problem=problem)
+        inputs = tok(prompt, return_tensors="pt").to("cuda")
+        t1 = time.time()
+        with torch.no_grad():
+            gen = model.generate(**inputs, max_new_tokens=2048, do_sample=False)
+        elapsed = time.time() - t1
+        text = tok.decode(gen[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
         ans = extract_answer(text)
         correct = answers_match(ans, expected)
-        tok_cnt = len(gen.token_ids)
+        tok_cnt = gen.shape[1] - inputs.input_ids.shape[1]
         results.append({"idx": i, "problem": problem, "expected": expected, "output": text,
                         "extracted": ans, "correct": correct,
                         "completion_tokens": tok_cnt, "output_chars": len(text),
-                        "has_boxed": "\\boxed" in text})
+                        "gen_time_s": round(elapsed, 2), "has_boxed": "\\boxed" in text})
         log_f.write(f"######第{i+1}个问题######\n{problem}\n\n---模型输出---\n{text}\n\n")
         log_f.write(f"##第{i+1}个问题的答案##：{ans} | 预期: {expected} | {'✓' if correct else '✗'}\n{'='*40}\n\n")
-        print(f"  [#{i+1:02d}] {tok_cnt}tok | Expect={expected} | Got={ans} | {'✓' if correct else '✗'}", flush=True)
+        print(f"  [#{i+1:02d}] {elapsed:.1f}s {tok_cnt}tok | Expect={expected} | Got={ans} | {'✓' if correct else '✗'}", flush=True)
     log_f.close()
 
     correct = sum(1 for r in results if r["correct"])
@@ -326,7 +332,7 @@ def evaluate(name, method, is_lora):
 def compare_results():
     log("生成对比报告")
     lines = ["# ReasonLite SFT 10 组实验对比报告 (AutoDL)", f"\n生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
-             f"数据: 4000 训练 + 50 验证 (token<500) | 评测: vLLM, 验证集 50 条\n",
+             f"数据: 4000 训练 + 50 验证 (token<500) | 评测: transformers generate, 验证集 50 条\n",
              "| 版本 | 方法 | 可训层 | 步数 | 正确率 | 平均token | 提取失败 |", "|------|------|-------|------|-------|-----------|---------|"]
     rows = []
     for method, layers, iters, name, _ in MATRIX:
