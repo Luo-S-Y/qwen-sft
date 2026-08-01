@@ -354,7 +354,7 @@ def evaluate(name, method, is_lora):
 
 
 # ==================== 评测 (vLLM 批量, 需环境装 vllm>=0.8.5) ====================
-def _eval_vllm_run(llm, sampling, name, method, prompts, problems, lora_path=None, lora_id=None):
+def _eval_vllm_run(llm, sampling, name, method, messages, problems, lora_path=None, lora_id=None):
     json_path = os.path.join(EVAL_DIR, f"{name}.json")
     if os.path.exists(json_path) and not FORCE:
         log(f"{name} 评测已存在, 跳过 (FORCE=1 强制重评)")
@@ -363,7 +363,7 @@ def _eval_vllm_run(llm, sampling, name, method, prompts, problems, lora_path=Non
     lora_req = LoRARequest(lora_name=name, lora_int_id=lora_id, lora_path=lora_path) if lora_path else None
     log(f"Eval(vLLM): {name} ({method})" + (" + LoRA" if lora_req else ""))
     t0 = time.time()
-    outputs = llm.generate(prompts, sampling, lora_request=lora_req)
+    outputs = llm.chat(messages, sampling, lora_request=lora_req, use_tqdm=False)
     gen_time = time.time() - t0
 
     results = []
@@ -399,9 +399,11 @@ def evaluate_all_vllm():
     # 禁用 torch.compile: 0.6B 小模型评测用不上其加速, 却能省 ~55s 启动编译
     os.environ.setdefault("VLLM_TORCH_COMPILE_LEVEL", "0")
     problems = load_problems()
-    prompts = [EVAL_PROMPT.format(problem=p) for p, _ in problems]
+    # 走 chat 接口 + 禁用 Qwen3 thinking (与 Mac 版 GGUF 的 enable_thinking:false 一致)
+    messages = [[{"role": "system", "content": EVAL_SYSTEM}, {"role": "user", "content": p}] for p, _ in problems]
     os.makedirs(EVAL_DIR, exist_ok=True)
-    sampling = SamplingParams(max_tokens=MAX_NEW, temperature=0.0)
+    sampling = SamplingParams(max_tokens=MAX_NEW, temperature=0.0,
+                              chat_template_kwargs={"enable_thinking": False})
 
     # base 实例: baseline + 3 个 LoRA (换 lora_request, 免重复加载模型)
     log(f"评测后端 vLLM: 加载 base 模型 {MODEL} (enable_lora)...")
@@ -410,9 +412,9 @@ def evaluate_all_vllm():
     lora_id = 1  # vllm 0.8.x 要求 LoRARequest 显式传 lora_int_id
     for method, layers, iters, name, is_lora in MATRIX:
         if name == "baseline":
-            _eval_vllm_run(llm, sampling, "baseline", "baseline", prompts, problems)
+            _eval_vllm_run(llm, sampling, "baseline", "baseline", messages, problems)
         elif is_lora:
-            _eval_vllm_run(llm, sampling, name, "LoRA", prompts, problems,
+            _eval_vllm_run(llm, sampling, name, "LoRA", messages, problems,
                            lora_path=os.path.join(ADAPTER_DIR, name), lora_id=lora_id)
             lora_id += 1
     del llm
@@ -428,7 +430,7 @@ def evaluate_all_vllm():
         log(f"加载 Full 模型 {mp}...")
         fllm = LLM(model=mp, trust_remote_code=True, enable_lora=False,
                    dtype="bfloat16", max_model_len=2048, gpu_memory_utilization=0.8, tensor_parallel_size=1)
-        _eval_vllm_run(fllm, sampling, name, "Full", prompts, problems)
+        _eval_vllm_run(fllm, sampling, name, "Full", messages, problems)
         del fllm
         import gc; gc.collect()
 
@@ -436,8 +438,9 @@ def evaluate_all_vllm():
 # ==================== 对比报告 ====================
 def compare_results():
     log("生成对比报告")
+    backend = "vLLM" if VLLM_AVAILABLE else "transformers generate"
     lines = ["# ReasonLite SFT 10 组实验对比报告 (AutoDL)", f"\n生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
-             f"数据: 4000 训练 + 50 验证 (token<500) | 评测: transformers generate, 验证集 50 条\n",
+             f"数据: 4000 训练 + 50 验证 (token<500) | 评测: {backend}, 验证集 50 条\n",
              "| 版本 | 方法 | 可训层 | 步数 | 正确率 | 平均token | 提取失败 |", "|------|------|-------|------|-------|-----------|---------|"]
     rows = []
     for method, layers, iters, name, _ in MATRIX:
