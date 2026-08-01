@@ -23,10 +23,10 @@ DATA_DIR = os.path.join(BASE, "data", "lora_short")
 ADAPTER_DIR = os.path.join(BASE, "adapters")
 FULL_DIR = os.path.join(BASE, "models", "full")
 EVAL_DIR = os.path.join(BASE, "result", "autodl")
-# 训练 batch 配置 (每步样本数 = BATCH_SIZE × GRAD_ACCUM = 16)
-# 默认 batch=16 + accum=1 (2080 Ti 22GB)
-# 显存不足时可用 AUTODL_BATCH=8 AUTODL_ACCUM=1 / AUTODL_BATCH=4 AUTODL_ACCUM=1 覆盖
-BATCH_SIZE = int(os.environ.get("AUTODL_BATCH", "16"))
+# 训练 batch 配置 (每步样本数 = BATCH_SIZE × GRAD_ACCUM)
+# 默认 batch=4 + accum=1 (每步 4 样本)
+# 可环境变量覆盖: AUTODL_BATCH=16 AUTODL_ACCUM=1
+BATCH_SIZE = int(os.environ.get("AUTODL_BATCH", "4"))
 GRAD_ACCUM = int(os.environ.get("AUTODL_ACCUM", "1"))
 # 优先用本地已下载的模型 (set_data.sh 负责下载), 否则回退 HF id
 LOCAL_MODEL = os.path.join(BASE, "models", "Qwen3-0.6B")
