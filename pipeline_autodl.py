@@ -178,7 +178,12 @@ def train(name, method, iters, is_lora, num_layers=None):
         return
 
     log(f"Step: {method} {iters} iters -> {save_dir}")
-    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    # 混合精度: Ampere+(sm80+) 用 bf16(原生); Turing(sm75, 如 2080Ti) 用 fp16(原生, bf16 会降级模拟变慢)
+    cap = torch.cuda.get_device_capability()
+    use_bf16 = cap[0] >= 8
+    dtype = torch.bfloat16 if use_bf16 else torch.float16
+    print(f"混合精度: {'bf16' if use_bf16 else 'fp16'} (GPU sm_{cap[0]}{cap[1]})", flush=True)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=dtype, trust_remote_code=True)
     tok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -224,7 +229,8 @@ def train(name, method, iters, is_lora, num_layers=None):
     args = TrainingArguments(
         output_dir=os.path.join(save_dir, "_ckpt"), max_steps=iters,
         per_device_train_batch_size=BATCH_SIZE, gradient_accumulation_steps=GRAD_ACCUM,
-        learning_rate=1e-4, bf16=True, logging_steps=5, save_strategy="no",
+        learning_rate=1e-4, bf16=use_bf16, fp16=not use_bf16,
+        logging_steps=5, save_strategy="no",
         eval_strategy="steps", eval_steps=100, report_to=[], seed=42,
         dataloader_num_workers=8,   # CPU 并行加载数据(避免 GPU 等数据)
         dataloader_pin_memory=True,
