@@ -1,0 +1,20 @@
+# 环境/依赖
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 模型与第三方（体积大，不上传）
+models/
+llama.cpp/
+
+# 训练/评估产物
+adapters/
+result/
+result_lora_test/
+result_test/
+
+# 旧数据集（保留当前使用的 lora_short）
+data/lora_subset/
+data/lora_4k/
+data/lora_subset_50/
