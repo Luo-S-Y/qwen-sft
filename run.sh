@@ -1,46 +1,19 @@
 #!/bin/bash
 # AutoDL 4090: 训练 + 评估 一键串联脚本
-# 用法: bash run.sh   (新实例直接跑即可, 会自动安装 vllm 环境 + 检查数据/模型)
-# 前置: 已跑过 bash set_data.sh (数据/模型下载, 模型不在时本脚本会报错提示)
+# 用法: bash run.sh   (直接用当前已激活的环境, 不自动装 conda 环境)
+# 前置: 1) 当前环境已装 torch/transformers/peft (评测加速可选 vllm>=0.8.5)
+#       2) 已跑过 bash set_data.sh (数据/模型下载)
 # 功能:
-#   [0]   自动准备 vllm 环境 (NO_VLLM=1 跳过, 评测回退 transformers; 缺失/过旧自动装)
 #   [1/2] 训练 9 组 (LoRA r16后8层 + Full后8/16层 x 100/500/1000 步)
-#   [2/2] 评估 10 版本 (vLLM 批量, 若环境无 vllm 自动回退 transformers)
+#   [2/2] 评估 10 版本 (环境有 vllm 用 vLLM 批量, 否则 transformers generate)
 # 日志: logs/train.log, logs/eval.log (终端同时实时显示)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ---------- 0. 环境准备: 默认准备 vllm (NO_VLLM=1 跳过, 评测回退 transformers) ----------
-load_conda() {
-    if command -v conda >/dev/null 2>&1; then
-        source "$(conda info --base)/etc/profile.d/conda.sh"
-    else
-        for p in /root/miniconda3 /opt/conda "$HOME/miniconda3"; do
-            [ -f "$p/etc/profile.d/conda.sh" ] && { source "$p/etc/profile.d/conda.sh"; return 0; }
-        done
-        echo "错误: 未找到 conda, 请确认 AutoDL 环境已装 miniconda"; exit 1
-    fi
-}
-if [ "${NO_VLLM:-0}" = "1" ]; then
-    echo "NO_VLLM=1: 跳过 vllm, 评测将使用 transformers generate (省磁盘, 略慢)"
-else
-    if [ "${CONDA_DEFAULT_ENV:-}" != "vllm" ]; then
-        load_conda
-        if conda env list | grep -qE '^vllm[[:space:]]'; then
-            echo "激活环境: vllm"
-            conda activate vllm
-        fi
-    fi
-    # 验证 vllm>=0.8.5 (Qwen3 支持), 缺失/过旧则自动安装
-    if ! python -c "import vllm; assert tuple(map(int, vllm.__version__.split('.')[:2])) >= (0, 8)" 2>/dev/null; then
-        echo "vllm 环境缺失或版本过旧, 自动安装 (bash setup_vllm.sh)..."
-        [ -f setup_vllm.sh ] || { echo "错误: 缺少 setup_vllm.sh"; exit 1; }
-        bash setup_vllm.sh
-        load_conda
-        conda activate vllm
-    fi
-    echo "环境: $CONDA_DEFAULT_ENV ($(python --version 2>&1))"
-fi
+# ---------- 0. 环境检查 (不管理 conda 环境) ----------
+echo "环境: ${CONDA_DEFAULT_ENV:-系统} ($(python --version 2>&1))"
+python -c "import vllm; print('vllm:', vllm.__version__, '(评测加速)')" 2>/dev/null \
+    || echo "vllm: 未安装, 评测将使用 transformers generate (装 vllm>=0.8.5 可加速)"
 
 # ---------- 前置检查: 数据/模型 ----------
 if [ ! -f data/lora_short/train.jsonl ] || [ ! -f data/lora_short/valid.jsonl ]; then
