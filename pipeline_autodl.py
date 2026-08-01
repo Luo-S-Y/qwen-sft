@@ -233,7 +233,7 @@ def train(name, method, iters, is_lora, num_layers=None):
         learning_rate=1e-4, bf16=use_bf16, fp16=not use_bf16,
         logging_steps=5, save_strategy="no",
         eval_strategy="steps", eval_steps=100, report_to=[], seed=42,
-        dataloader_num_workers=8,   # CPU 并行加载数据(避免 GPU 等数据)
+        dataloader_num_workers=4,   # CPU 并行加载数据(避免 GPU 等数据)
         dataloader_pin_memory=True,
     )
     trainer = Trainer(model=model, args=args, train_dataset=train_ds, eval_dataset=eval_ds,
