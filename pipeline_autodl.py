@@ -396,6 +396,8 @@ def _eval_vllm_run(llm, sampling, name, method, prompts, problems, lora_path=Non
 
 def evaluate_all_vllm():
     from vllm import LLM, SamplingParams
+    # 禁用 torch.compile: 0.6B 小模型评测用不上其加速, 却能省 ~55s 启动编译
+    os.environ.setdefault("VLLM_TORCH_COMPILE_LEVEL", "0")
     problems = load_problems()
     prompts = [EVAL_PROMPT.format(problem=p) for p, _ in problems]
     os.makedirs(EVAL_DIR, exist_ok=True)
