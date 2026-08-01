@@ -178,13 +178,14 @@ def train(name, method, iters, is_lora, num_layers=None):
         return
 
     log(f"Step: {method} {iters} iters -> {save_dir}")
-    # 混合精度: Ampere+(sm80+) 用 bf16(模型直接 bf16, 无 scaler);
-    # Turing(sm75, 如 2080Ti) 用 fp16 AMP(模型保持 fp32, 由 autocast+scaler 处理, 避免 fp16 梯度 unscale 报错)
+    # 混合精度策略:
+    # Ampere+(sm80+) -> bf16 AMP (原生支持, 模型 bf16)
+    # Turing(sm75)  -> fp16 直训 (模型 fp16, 不用 AMP/scaler, 显存最小; 不用 fp32 避免 OOM)
     cap = torch.cuda.get_device_capability()
     use_bf16 = cap[0] >= 8
-    dtype = torch.bfloat16 if use_bf16 else torch.float32
-    print(f"混合精度: {'bf16' if use_bf16 else 'fp16'} (GPU sm_{cap[0]}{cap[1]})", flush=True)
-    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=dtype, trust_remote_code=True)
+    model_dtype = torch.bfloat16 if use_bf16 else torch.float16
+    print(f"混合精度: {'bf16' if use_bf16 else 'fp16(直训)'} (GPU sm_{cap[0]}{cap[1]})", flush=True)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=model_dtype, trust_remote_code=True)
     tok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -233,7 +234,7 @@ def train(name, method, iters, is_lora, num_layers=None):
     args = TrainingArguments(
         output_dir=os.path.join(save_dir, "_ckpt"), max_steps=iters,
         per_device_train_batch_size=BATCH_SIZE, gradient_accumulation_steps=GRAD_ACCUM,
-        learning_rate=1e-4, bf16=use_bf16, fp16=not use_bf16,
+        learning_rate=1e-4, bf16=use_bf16, fp16=False,  # fp16 直训时关闭 AMP/scaler
         logging_steps=5, save_strategy="no",
         eval_strategy="steps", eval_steps=100, report_to=[], seed=42,
         dataloader_num_workers=4,   # CPU 并行加载数据(避免 GPU 等数据)
