@@ -225,7 +225,9 @@ def train(name, method, iters, is_lora, num_layers=None):
         output_dir=os.path.join(save_dir, "_ckpt"), max_steps=iters,
         per_device_train_batch_size=BATCH_SIZE, gradient_accumulation_steps=GRAD_ACCUM,
         learning_rate=1e-4, bf16=True, logging_steps=5, save_strategy="no",
-        eval_strategy="steps", eval_steps=50, report_to=[], seed=42,
+        eval_strategy="steps", eval_steps=100, report_to=[], seed=42,
+        dataloader_num_workers=8,   # CPU 并行加载数据(避免 GPU 等数据)
+        dataloader_pin_memory=True,
     )
     trainer = Trainer(model=model, args=args, train_dataset=train_ds, eval_dataset=eval_ds,
                       data_collator=DataCollatorForLanguageModeling(tokenizer=tok, mlm=False))
