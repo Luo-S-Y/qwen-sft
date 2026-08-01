@@ -463,45 +463,52 @@ def compare_results():
     print(report, flush=True)
 
 
-def main():
+def main(train_only=False, eval_only=False):
     log("=" * 60)
     log("ReasonLite SFT PIPELINE (AutoDL) START")
     log(f"模型: {MODEL}")
+    log("模式: " + ("仅训练" if train_only else "仅评估" if eval_only else "训练 + 评估"))
     log("=" * 60)
     t_start = time.time()
-    ensure_env()
-    prepare_data()
-    # LoRA 后8层 100/500/1000
-    for iters in [100, 500, 1000]:
-        train(f"lora_{iters}", f"LoRA r16 后8层 {iters}", iters, is_lora=True, num_layers=8)
-    # Full 后8层
-    for iters in [100, 500, 1000]:
-        train(f"full8_{iters}", f"Full 后8层 {iters}", iters, is_lora=False, num_layers=8)
-    # Full 后16层
-    for iters in [100, 500, 1000]:
-        train(f"full16_{iters}", f"Full 后16层 {iters}", iters, is_lora=False, num_layers=16)
+    if not eval_only:
+        ensure_env()
+        prepare_data()
+        # LoRA 后8层 100/500/1000
+        for iters in [100, 500, 1000]:
+            train(f"lora_{iters}", f"LoRA r16 后8层 {iters}", iters, is_lora=True, num_layers=8)
+        # Full 后8层
+        for iters in [100, 500, 1000]:
+            train(f"full8_{iters}", f"Full 后8层 {iters}", iters, is_lora=False, num_layers=8)
+        # Full 后16层
+        for iters in [100, 500, 1000]:
+            train(f"full16_{iters}", f"Full 后16层 {iters}", iters, is_lora=False, num_layers=16)
     # 评估全部 10 版本 (优先 vLLM 批量, 否则 transformers 逐条)
-    if VLLM_AVAILABLE:
-        log("评测后端: vLLM (批量, 5-10x 加速)")
-        try:
-            evaluate_all_vllm()
-        except Exception as e:
-            print(f"  vLLM 评测失败: {e}, 回退 transformers", flush=True)
+    if not train_only:
+        if VLLM_AVAILABLE:
+            log("评测后端: vLLM (批量, 5-10x 加速)")
+            try:
+                evaluate_all_vllm()
+            except Exception as e:
+                print(f"  vLLM 评测失败: {e}, 回退 transformers", flush=True)
+                for method, _, _, name, is_lora in MATRIX:
+                    try:
+                        evaluate(name, method, is_lora)
+                    except Exception as e2:
+                        print(f"  {name} 评测失败: {e2}", flush=True)
+        else:
+            log("评测后端: transformers generate (装 vllm>=0.8.5 可加速)")
             for method, _, _, name, is_lora in MATRIX:
                 try:
                     evaluate(name, method, is_lora)
-                except Exception as e2:
-                    print(f"  {name} 评测失败: {e2}", flush=True)
-    else:
-        log("评测后端: transformers generate (装 vllm>=0.8.5 可加速)")
-        for method, _, _, name, is_lora in MATRIX:
-            try:
-                evaluate(name, method, is_lora)
-            except Exception as e:
-                print(f"  {name} 评测失败: {e}", flush=True)
-    compare_results()
+                except Exception as e:
+                    print(f"  {name} 评测失败: {e}", flush=True)
+        compare_results()
     log(f"PIPELINE COMPLETE! 总耗时 {(time.time()-t_start)/3600:.1f} 小时")
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description="ReasonLite SFT pipeline (AutoDL)")
+    ap.add_argument("--train-only", action="store_true", help="只训练 (9 组), 跳过评估")
+    ap.add_argument("--eval-only", action="store_true", help="只评估 (10 版本, 需已有训练产物), 跳过训练")
+    args = ap.parse_args()
+    main(train_only=args.train_only, eval_only=args.eval_only)
