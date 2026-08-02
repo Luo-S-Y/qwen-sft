@@ -34,6 +34,7 @@ DATA_DIR = os.path.join(BASE, "data", "lora_short")
 ADAPTER_DIR = os.path.join(BASE, "adapters")
 FULL_DIR = os.path.join(BASE, "models", "full")
 EVAL_DIR = os.path.join(BASE, "result", "autodl")
+TRAIN_LOG_DIR = os.path.join(EVAL_DIR, "train")  # 每实验训练 loss 日志 (jsonl)
 # 训练 batch 配置 (每步样本数 = BATCH_SIZE × GRAD_ACCUM)
 # 默认 batch=4 + accum=1 (每步 4 样本)
 # 可环境变量覆盖: AUTODL_BATCH=16 AUTODL_ACCUM=1
@@ -181,6 +182,18 @@ def prepare_data(num_train=4000, num_valid=50, max_tokens=500, max_scan=300000, 
 
 
 # ==================== 训练 ====================
+class _ExpLogCallback:
+    """把每个实验的训练/评估 loss 按版本写入 result/autodl/train/{name}.jsonl"""
+    def __init__(self, path):
+        self.path = path
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs:
+            logs = dict(logs)
+            logs["step"] = state.global_step
+            with open(self.path, "a") as f:
+                f.write(json.dumps(logs, ensure_ascii=False) + "\n")
+
+
 def train(name, method, iters, is_lora, num_layers=None):
     """num_layers: Full 时训练的后 N 层; LoRA 时注入 LoRA 的后 N 层"""
     import torch
@@ -259,8 +272,13 @@ def train(name, method, iters, is_lora, num_layers=None):
         dataloader_pin_memory=True,
         gradient_checkpointing=use_grad_ckpt,
     )
+    # 训练/评估 loss 按版本落盘 (result/autodl/train/{name}.jsonl), 便于后续分析
+    os.makedirs(TRAIN_LOG_DIR, exist_ok=True)
+    train_log_path = os.path.join(TRAIN_LOG_DIR, f"{name}.jsonl")
+    log(f"训练日志 -> {train_log_path}")
     trainer = Trainer(model=model, args=args, train_dataset=train_ds, eval_dataset=eval_ds,
-                      data_collator=DataCollatorForLanguageModeling(tokenizer=tok, mlm=False))
+                      data_collator=DataCollatorForLanguageModeling(tokenizer=tok, mlm=False),
+                      callbacks=[_ExpLogCallback(train_log_path)])
     t0 = time.time()
     trainer.train()
     print(f"  训练耗时 {time.time()-t0:.0f}s", flush=True)

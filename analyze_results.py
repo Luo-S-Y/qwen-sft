@@ -2,14 +2,15 @@
 """
 ReasonLite 实验分析: 验证集多维度统计 + 训练 loss 提取
 用法:
-  python analyze_results.py                       # 验证集分析 -> result/autodl/analysis.md
-  python analyze_results.py --train-log result/pipeline_output.log   # Mac MLX 训练日志
-  python analyze_results.py --train-log logs/train.log               # AutoDL Trainer 日志
+  python analyze_results.py                                            # 验证集分析 -> result/autodl/analysis.md
+  python analyze_results.py --train-log result/autodl/train            # 训练 loss: jsonl 目录 (pipeline 新版)
+  python analyze_results.py --train-log logs/train.log                 # 训练 loss: AutoDL Trainer stdout
+  python analyze_results.py --train-log result/pipeline_output.log     # 训练 loss: Mac MLX 日志
 输出:
   result/autodl/analysis.md    验证集: 正确率/题型分层/作答质量/稳定性/部分分
   result/autodl/train_loss.md  每实验 loss 变化
 """
-import os, re, json, sys, argparse
+import os, re, json, sys, glob, argparse
 from collections import defaultdict
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -190,6 +191,52 @@ def parse_train_log(path):
 
 
 def report_loss(path):
+    """优先解析 result/autodl/train/{version}.jsonl (pipeline 训练回调落盘), 否则解析 stdout 日志"""
+    def is_jsonl(p):
+        try:
+            with open(p) as f:
+                for _ in range(5):
+                    line = f.readline()
+                    if line.strip():
+                        json.loads(line)
+                        break
+            return True
+        except Exception:
+            return False
+
+    def add_jsonl(fp, name, lines):
+        rows = [json.loads(l) for l in open(fp) if l.strip()]
+        lines += [f"## {name}", "", "| step | train loss | eval loss | lr |", "|------|-----------|-----------|-----|"]
+        show = rows if len(rows) <= 60 else rows[::max(1, len(rows) // 60)]
+        for r in show:
+            lines.append(f"| {r.get('step','-')} | {r.get('loss','-')} | {r.get('eval_loss','-')} | {r.get('learning_rate','-')} |")
+        lines.append("")
+        tl = [r["loss"] for r in rows if "loss" in r]
+        ev = [r["eval_loss"] for r in rows if "eval_loss" in r]
+        desc = f"{name}: train {tl[0]:.4f}->{tl[-1]:.4f} ({len(tl)}点)" if tl else f"{name}: 无 train loss"
+        if ev:
+            desc += f" | val {ev[0]:.4f}->{ev[-1]:.4f}"
+        print("  " + desc)
+
+    if os.path.isdir(path):
+        files = sorted(glob.glob(os.path.join(path, "*.jsonl")))
+        if files:
+            lines = ["# 训练 loss (每实验 jsonl)", "", "来源: result/autodl/train/{version}.jsonl", ""]
+            for fp in files:
+                add_jsonl(fp, os.path.splitext(os.path.basename(fp))[0], lines)
+            out = os.path.join(EVAL_DIR, "train_loss.md")
+            open(out, "w").write("\n".join(lines))
+            print(f"[训练 loss -> {out}]")
+            return
+    elif is_jsonl(path):
+        lines = ["# 训练 loss (jsonl)", ""]
+        add_jsonl(path, os.path.splitext(os.path.basename(path))[0], lines)
+        out = os.path.join(EVAL_DIR, "train_loss.md")
+        open(out, "w").write("\n".join(lines))
+        print(f"[训练 loss -> {out}]")
+        return
+
+    # 旧格式: stdout 日志 (Mac MLX 或 AutoDL Trainer dict)
     exps = parse_train_log(path)
     if not exps:
         print(f"未从 {path} 解析到 loss 数据")
