@@ -72,21 +72,6 @@ def analyze_eval():
 
     total = data[NAMES[0]]["total"]
     lines = ["# ReasonLite 验证集分析 (50 题数学竞赛)", ""]
-    lines += [
-        "## 0. 背景：ReasonLite 论文怎么做的",
-        "",
-        "ReasonLite（AMD, 2025.12）是 0.6B 参数的轻量数学推理模型，AIME 2024 达 75.2%（与 Qwen3-8B 相当，参数少约 13x），核心方法是**课程蒸馏 (Curriculum Distillation)**：",
-        "",
-        "1. **数据收集**：从 Polaris、NVIDIA OpenMathReasoning 等收集 343K 道数学竞赛题",
-        "2. **教师蒸馏**：用强教师 GPT-OSS-120B 以 medium/high-depth 两种推理深度为每题生成解答，产出约 9.1M 个 AI 解",
-        "3. **伪标签筛选**：教师多次作答 + 多数投票 (majority-voting) 生成可靠伪标签，与原始标签一致性过滤，最终得到 6.1M 高质量 题-解对",
-        "4. **两阶段 SFT 课程**：Stage 1 用 **Short CoT（4.3M 条）** 训出高效的 Turbo 版；Stage 2 用 **Long CoT（1.8M 条）** 训出最终版（峰值准确率）",
-        "   - 基座 Qwen3-0.6B: AIME24 11.0 → Turbo: 57.1 → ReasonLite: **75.2**",
-        "5. **开源**：权重 amd/ReasonLite-0.6B + 数据 amd/ReasonLite-Dataset + 代码全公开",
-        "",
-        "**本项目轻量复现**：Qwen3-0.6B + 4000 条 token<500 短样本（来自 ReasonLite-Dataset medium 子集），对比 LoRA(r16 后8层) 与 Full(后8/16层) SFT 各 100/500/1000 步，验证集 50 题。",
-        "",
-    ]
 
     # 1. 总表
     lines += ["## 1. 各版本总览", "",
